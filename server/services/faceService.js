@@ -1,8 +1,33 @@
 const path = require('path');
 const faceapi = require('@vladmandic/face-api');
-// tfjs-node is required for hardware acceleration and to initialize the node environment
-require('@tensorflow/tfjs-node'); 
 const canvas = require('canvas');
+
+// ────────────────────────────────────────────────────────────
+// Initialize the best available TensorFlow backend.
+//  1. tfjs-node  → native, fast (uses libtensorflow). Requires the
+//     libtensorflow binary to be present (downloaded on install).
+//  2. fallback   → @tensorflow/tfjs CPU backend. Slower, but works on
+//     any machine without native compilation. The server NEVER crashes
+//     to a missing .dylib/.dll again.
+// ────────────────────────────────────────────────────────────
+let tfBackend = 'none';
+
+try {
+    require('@tensorflow/tfjs-node');
+    tfBackend = 'tfjs-node (native, rapid)';
+} catch (e) {
+    const reason = (e.message || '').split('\n')[0];
+    console.warn(`\x1b[33m%s\x1b[0m`, `[faceService] Backend nativ indisponibil — trec pe fallback CPU.`);
+    console.warn(`\x1b[33m%s\x1b[0m`, `[faceService] Motiv: ${reason}`);
+    console.warn(`\x1b[33m%s\x1b[0m`, `[faceService] Pentru viteză, încearcă: cd server && npm rebuild @tensorflow/tfjs-node`);
+    try {
+        const tf = require('@tensorflow/tfjs');
+        tf.setBackend('cpu');
+        tfBackend = 'tfjs-cpu (fallback, lent dar funcțional)';
+    } catch (e2) {
+        console.error(`\x1b[31m%s\x1b[0m`, `[faceService] Nici fallback-ul CPU nu a putut fi inițializat:`, (e2.message || '').split('\n')[0]);
+    }
+}
 
 // Patch nodejs environment so face-api can work with the canvas library
 const { Canvas, Image, ImageData } = canvas;
@@ -15,12 +40,13 @@ let modelsLoaded = false;
 async function loadModels() {
     if (modelsLoaded) return;
     try {
+        console.log(`\x1b[36m%s\x1b[0m`, `[faceService] Backend activ: ${tfBackend}`);
         console.log('Loading face-api models from:', MODELS_PATH);
         await faceapi.nets.ssdMobilenetv1.loadFromDisk(MODELS_PATH);
         await faceapi.nets.faceLandmark68Net.loadFromDisk(MODELS_PATH);
         await faceapi.nets.faceRecognitionNet.loadFromDisk(MODELS_PATH);
         modelsLoaded = true;
-        console.log('Face-api models loaded successfully.');
+        console.log(`\x1b[32m%s\x1b[0m`, `[faceService] Modele încărcate. Gata de procesare!`);
     } catch (error) {
         console.error('Error loading face-api models:', error);
         throw error;

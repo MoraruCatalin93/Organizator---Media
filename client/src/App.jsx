@@ -1,8 +1,9 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Camera, Users, FolderSync, Settings } from 'lucide-react';
+import { Camera, Users, FolderSync, Settings, Images } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import ManagePersons from './pages/ManagePersons';
 import ProcessImages from './pages/ProcessImages';
+import Gallery from './pages/Gallery';
 
 function Navigation() {
   const location = useLocation();
@@ -10,6 +11,7 @@ function Navigation() {
     { path: '/', label: 'Panou Control', icon: <Camera size={20} /> },
     { path: '/persons', label: 'Persoane', icon: <Users size={20} /> },
     { path: '/process', label: 'Procesare', icon: <FolderSync size={20} /> },
+    { path: '/gallery', label: 'Galerie', icon: <Images size={20} /> },
   ];
 
   return (
@@ -58,6 +60,7 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/persons" element={<ManagePersons />} />
               <Route path="/process" element={<ProcessImages />} />
+              <Route path="/gallery" element={<Gallery />} />
             </Routes>
           </div>
         </main>

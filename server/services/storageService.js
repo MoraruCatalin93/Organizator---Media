@@ -1,85 +1,112 @@
 const fs = require('fs-extra');
 const path = require('path');
 const { getAllFaces, findBestMatch } = require('./faceService');
+const { prepareImage } = require('./imageService');
+const { getStorageProvider } = require('../storage');
+const config = require('../config');
 
-const OUTPUT_DIR = path.join(__dirname, '../output');
-const DATA_FILE = path.join(__dirname, '../data/db.json');
+const OUTPUT_DIR = config.outputDir;
+const { getAllPersonsWithDescriptors, addPersonDescriptor, deletePerson: deletePersonRepo, getPersonsSummary } = require('../repositories/personRepository');
 
 // Ensure directories exist
 fs.ensureDirSync(OUTPUT_DIR);
-fs.ensureDirSync(path.dirname(DATA_FILE));
-
-// Initialize DB if doesn't exist
-if (!fs.existsSync(DATA_FILE)) {
-    fs.writeJsonSync(DATA_FILE, { persons: {} });
-}
 
 function getDatabase() {
-    return fs.readJsonSync(DATA_FILE);
+    return { persons: getAllPersonsWithDescriptors() };
 }
 
 function saveDatabase(data) {
-    fs.writeJsonSync(DATA_FILE, data, { spaces: 2 });
+    console.warn('saveDatabase called but is deprecated in favor of SQLite repository.');
 }
 
 function addPerson(name, descriptors) {
-    const db = getDatabase();
-    if (!db.persons[name]) {
-        db.persons[name] = [];
-    }
-    // Convert Float32Array to standard array for JSON serialization
     const serializableDescriptors = descriptors.map(desc => Array.from(desc));
-    db.persons[name].push(...serializableDescriptors);
-    saveDatabase(db);
+    for (const desc of serializableDescriptors) {
+        addPersonDescriptor(name, desc);
+    }
 }
 
 function getPersons() {
-    const db = getDatabase();
-    return Object.keys(db.persons);
+    const summary = getPersonsSummary();
+    return summary.map(s => s.name);
 }
 
-// Helper to determine the destination folder
-async function processImageFile(imagePath, db) {
+function deletePerson(name) {
+    return deletePersonRepo(name);
+}
+
+// Count total descriptor entries for a person's record.
+// Handles both arrays of descriptors (flat) and any nested shape defensively.
+function countDescriptors(descriptors) {
+    if (!Array.isArray(descriptors)) return 0;
+    return descriptors.length;
+}
+
+// Helper to determine the destination folder(s) for one image.
+// Returns { matched, storeBuffer, converted, details }.
+async function processImageFile(imagePath, db, transientUnknowns = {}) {
+    const raw = await fs.readFile(imagePath);
+
+    // Normalize: EXIF auto-orient + HEIC→JPEG (for detection).
+    // storeBuffer keeps the ORIGINAL unless it was HEIC (then the JPEG).
+    let detectBuffer = raw;
+    let storeBuffer = raw;
+    let converted = false;
     try {
-        const imageBuffer = await fs.readFile(imagePath);
-        const detections = await getAllFaces(imageBuffer);
-        
+        ({ detectBuffer, storeBuffer, converted } = await prepareImage(raw));
+    } catch (e) {
+        console.warn(`[prepareImage] fallback la buffer brut pentru ${imagePath}: ${e.message}`);
+    }
+
+    try {
+        const detections = await getAllFaces(detectBuffer);
+
         if (detections.length === 0) {
-            return ['Unknown']; // No faces
+            return { matched: ['Unknown'], storeBuffer, converted, details: [] }; // No faces
         }
 
         const matchedNames = new Set();
-        
+        const details = [];
+
         for (const detection of detections) {
-            const match = findBestMatch(detection.descriptor, db.persons);
+            // Merge global db with transient unknowns for the current batch
+            const combinedDb = { ...db.persons, ...transientUnknowns };
+            const match = findBestMatch(detection.descriptor, combinedDb);
+            
             if (match) {
                 matchedNames.add(match.label);
+                details.push({ label: match.label, distance: match.distance, descriptor: Array.from(detection.descriptor) });
+            } else {
+                // Calculate next unknown index
+                const dbUnknownsCount = Object.keys(db.persons).filter(k => k.startsWith('Necunoscut')).length;
+                const transientCount = Object.keys(transientUnknowns).length;
+                const newName = `Necunoscut ${dbUnknownsCount + transientCount + 1}`;
+                
+                transientUnknowns[newName] = [detection.descriptor];
+                matchedNames.add(newName);
+                details.push({ label: newName, distance: 0, descriptor: Array.from(detection.descriptor) });
             }
         }
-        
+
         if (matchedNames.size === 0) {
-            return ['Unknown']; // Faces detected but unknown
+            return { matched: ['Eroare necunoscută'], storeBuffer, converted, details: [] };
         }
-        
-        if (matchedNames.size > 1) {
-            // Group photo, let's duplicate it into each person's folder for better organization
-            return Array.from(matchedNames);
-        }
-        
-        // Single match
-        return Array.from(matchedNames);
-        
+
+        // Single match or group photo (one entry per known person)
+        return { matched: Array.from(matchedNames), storeBuffer, converted, details };
+
     } catch (e) {
         console.error(`Error processing image ${imagePath}:`, e);
-        return ['Errors'];
+        return { matched: ['Errors'], storeBuffer, converted, details: [] };
     }
 }
 
-async function copyImageToFolders(imagePath, targetFolders, fileName) {
+// Write the (already-prepared) buffer into each target person's folder
+// through the active storage provider (local / drive / s3).
+async function copyImageToFolders(buffer, targetFolders, fileName, provider) {
+    const store = provider || getStorageProvider(config.storageTarget);
     for (const folderName of targetFolders) {
-        const targetDir = path.join(OUTPUT_DIR, folderName);
-        await fs.ensureDir(targetDir);
-        await fs.copy(imagePath, path.join(targetDir, fileName));
+        await store.write(path.join(folderName, fileName), buffer);
     }
 }
 
@@ -87,6 +114,9 @@ module.exports = {
     addPerson,
     getPersons,
     getDatabase,
+    saveDatabase,
+    deletePerson,
+    countDescriptors,
     processImageFile,
     copyImageToFolders,
     OUTPUT_DIR
