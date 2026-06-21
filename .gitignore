@@ -69,3 +69,16 @@ pnpm-debug.log*
 coverage/
 .cache/
 *.tsbuildinfo
+
+# RUNTIME-DATA-IGNORE: tot ce e runtime in data/ (NU in git)
+server/data/*
+!server/data/.gitkeep
+
+# Fisiere temporare de lucru
+photosync-files.zip
+photosync-setup.sh
+repomix-output.xml
+*.bak
+
+# Referinte imagini (pozele userului)
+server/data/references/
